@@ -1,0 +1,488 @@
+// irc client module
+// 
+
+var sys = require("sys"),
+    tcp = require("tcp"),
+    Channel = require('./channel').Channel,
+    PromiseGiver = require('./promisegiver').PromiseGiver;
+
+/**
+ * create a client that connects to one irc server. pass arguments here or set later
+ * @param host the adress to connect to defaults to 127.0.0.1
+ * @param port the port defaults to 6667
+ * @param nick the nick to use defaults to NodeJSIRC### where ### is a random number 0-999
+ * @param user the username
+ * @param realname 
+ * @see Client.prototype.initialize
+ */
+var Client = exports.Client = function Client(host, port, nick, user, realname){
+    this.initialize(host, port, nick, user, realname);
+};
+
+sys.inherits(Client, process.EventEmitter);
+
+/**
+ * initialize the object
+ * @see Client
+ */
+Client.prototype.initialize = function initialize(host, port, nick, user, realname){
+    this.host = host || "127.0.0.1";
+    this.port = port || 6667;
+    this.nick = nick || "NodeJSIRC"+Math.floor(Math.random()*1000);
+    this.user = user || "nodejs";
+    this.realname = realname || "NodeJS.IRC";
+
+    this.connection = null;
+    this.buffer = "";
+    this.encoding = "utf8";
+    this.timeout = 60*60*1000;
+
+    this._channels = {};
+    this._promiseGiver = new PromiseGiver();
+
+    this.debug = false;
+
+    this.version = "NodeJS.IRC 0.1 http://github.com/fwg/nodejs.irc";
+    this.quitreason = 'power drained';
+}
+
+/**
+ * actually open the connection
+ */
+Client.prototype.connect = function connect(){
+    var c = this.connection = tcp.createConnection(this.port, this.host);
+    c.setEncoding(this.encoding);
+    c.setTimeout(this.timeout);
+
+    var that = this;
+    function addL(ev, f){
+        return c.addListener(ev, (function(){
+            return function(){f.apply(that,arguments)};
+        })() );
+    }
+    addL("connect", this.onConnect);
+    addL("receive", this.onReceive);
+    addL("eof", this.onEOF);
+    addL("timeout", this.onTimeout);
+    addL("close", this.onClose);
+};
+
+/**
+ * disconnect from the server
+ */
+Client.prototype.disconnect = function disconnect(reason){
+    this._promiseGiver.cancel();
+
+    if(this.connection.readyState !== 'closed'){
+        this.connection.close();
+        sys.puts("disconnected ("+reason+")");
+    }
+};
+
+//
+// connection event listeners
+// 
+Client.prototype.onConnect = function onConnect(){
+    this.raw("NICK", this.nick);
+    this.raw("USER", this.user, '0', '*', ':'+this.realname);
+
+    this.emit("connect");
+};
+
+Client.prototype.onReceive = function onReceive(chunk){
+    this.buffer += chunk;
+
+    while(this.buffer){
+        var offset = this.buffer.indexOf("\r\n");
+        if(offset < 0){ 
+            return;
+        }
+
+        var msg = this.buffer.slice(0,offset);
+        this.buffer = this.buffer.slice(offset+2);
+        sys.puts("< "+msg);
+
+        msg = this.parse(msg);
+        var args = [msg.cmd, msg.prefix].concat(msg.params);
+
+        this.onMessage.apply(this, [args].concat(args));
+    }
+};
+
+Client.prototype.onMessage = function onMessage(args, cmd, from, one, two, three){
+    switch(cmd){
+        case 'PING':
+            this.raw("PONG", one);
+            break;
+        case 'PRIVMSG':
+            // direct message
+            if(one.toLowerCase() == this.nick.toLowerCase()){
+                one = from.match(/^([^!]+)!.*/)[1];
+            }
+            // replace channel name with ch. obj
+            var c = this.channel(one);
+            c.addListener('PRIVMSG', this.replyCTCP);
+            args[2] = c;
+            c.emit.apply(c, args); 
+            break;
+    }
+    this.emit.apply(this, args);
+};
+
+Client.prototype.onEOF = function() {
+    this.disconnect('EOF');
+};
+
+Client.prototype.onTimeout = function() {
+    this.disconnect('timeout');
+};
+
+Client.prototype.onClose = function() {
+    this.disconnect('close');
+};
+
+//
+// base functionality
+//
+
+/**
+ * get the channel object of channel chan, if not present, create it
+ * @param chan the channel name
+ * @return the channel object
+ */
+Client.prototype.channel = function channel(chan){
+    var c = chan.toLowerCase();
+    if(!this._channels[c]){
+        return this._channels[c] = new Channel(chan, this);
+    }
+    return this._channels[c];
+};
+
+/**
+ * send raw message to server
+ * @param cmd the command, PRIVMSG, JOIN etc
+ * @param ... all the rest arguments are joined into one message
+ */
+Client.prototype.raw = function raw(cmd){
+    if(this.connection.readyState !== "open"){
+        return this.disconnect("cannot send with readyState "+this.connection.readyState);
+    }
+
+    var msg = Array.prototype.slice.call(arguments,1).join(' ') +"\r\n";
+
+    if(this.debug)sys.puts('>'+ cmd +' '+ msg);
+
+    this.connection.send(cmd+ " " +msg, this.encoding);
+};
+
+/**
+ * parse an incoming message
+ * @param msg the message
+ * @return an object with .cmd, .prefix and space-split message parameters in .params
+ */
+Client.prototype.parse = function parse(msg){
+    var match = msg.match(/(?::(\S+) )?(\S+) (.+)/);
+    var parsed = {
+        prefix: match[1],
+        cmd: match[2]
+    };
+    
+    var params;
+
+    // there may be no trailing param
+    if(match[3].indexOf(':') < 0){
+        params = match[3].split(' ');
+    }else{
+        params = match[3].match(/(.*?) ?:(.+)/);
+        params = (params[1])
+            ? params[1].split(' ').concat(params.slice(2,3))
+            : params.slice(2,3);
+    }
+    parsed.params = params;
+
+    return parsed;
+};
+
+/**
+ * wait for server to send specific response
+ * @param reply response command, e.g. NICK, JOIN, 352, ...
+ * @param timeout when promise should be canceled. pass anything not > 0 to ignore.
+ * @param ... the params of the response, e.g. #channel
+ *        pass "" for any match/skip
+ *        pass regexp for advanced matching
+ *        pass more arguments than the reply will have and they will be passed to 
+ *        success callbacks
+ * @return promise that is fulfilled when the response arrives
+ */
+Client.prototype.whenReply = function whenReply(reply, timeout){
+    var p = this._promiseGiver.create(),
+        args = Array.prototype.slice.call(arguments, 2),
+        client = this;
+
+    if(+timeout > 0){
+         p.timeout(+timeout);
+    }
+
+    function waiter(){
+        // args must fit
+        for(var i=0,l=Math.min(args.length, arguments.length);i<l;i++){
+            if(args[i] && (
+                (args[i] instanceof RegExp && !args[i].test(arguments[i]))
+                ||
+                (!(args[i] instanceof RegExp) && arguments[i] != args[i]) ))
+                return;
+        }
+
+        client.removeListener(reply, waiter);
+
+        var results = args.length > arguments.length ?
+                Array.prototype.slice.call(arguments).concat(args.slice(arguments.length)) :
+                arguments;
+        p.emitSuccess.apply(p, results); 
+    };
+
+    this.addListener(reply, waiter);
+
+    function cleanup(e){
+        client.removeListener(reply, waiter);
+    };
+
+    p.addCancelback(cleanup);
+    p.addErrback(cleanup);
+    
+    if(this.debug)p.debug = "reply "+reply;
+
+    return p;
+};
+
+/**
+ * until one of the given replies is received
+ * @param replies array of reply commands
+ * @param timeout when promise should be canceled. pass anything not > 0 to ignore.
+ * @return promise
+ */
+Client.prototype.whenOneReplyOf = function whenOneReplyOf(replies, timeout){
+    var p = this._promiseGiver.create();
+    var client = this;
+
+    if(+timeout > 0){
+        p.timeout(+timeout);
+    }
+
+    function waiter(){
+        p.emitSuccess.apply(p, arguments);
+    }
+
+    for(var i=replies.length;--i>-1;){
+        this.addListener(replies[i], waiter);
+    }
+
+    function cleanup(){
+        for(var i=replies.length;--i>-1;){
+            client.removeListener(replies[i], waiter);
+        }
+    };
+
+    p.addCancelback(cleanup).addErrback(cleanup).addCallback(cleanup);
+
+    if(this.debug)p.debug = "one reply of "+replies.join(',');
+
+    return p;
+};
+
+/**
+ * quit
+ */
+Client.prototype.quit = function quit(reason){
+    reason = reason || this.quitreason;
+    this.emit("QUIT", reason);
+    this.raw("QUIT", ':'+reason);
+}
+
+/**
+ * reconnect
+ */
+Client.prototype.reconnect = function reconnect(reason){
+    var client = this;
+    this.connection.addListener('close',function connect(){
+        client.connection.removeListener('close', connect);
+        client.connect();
+    });
+    this.quit(reason);
+};
+
+/**
+ * send a privmsg to a channel or another client
+ * @param channel the channel or nick
+ * @param msg the message
+ */
+Client.prototype.privmsg = function privmsg(channel, msg){
+    this.raw("PRIVMSG", channel, ':'+msg);
+};
+
+/**
+ * send a notice to a channel or another client
+ * @see Client.prototype.privmsg
+ */
+Client.prototype.notice = function notice(channel, msg){
+    this.raw('NOTICE', channel, ':'+msg);
+};
+
+/**
+ * @param channel to join
+ * @param callback optional. will be called when the channel is joined
+ * @return promise when channel is joined. callback argument is the channel obj.
+ */
+Client.prototype.join = function join(channel /*, callback*/){
+    var c = this.channel(channel),
+        p = this._promiseGiver.create(),
+        client = this;
+
+    if(arguments[1])p.addCallback(arguments[1]);
+
+    var chanrx = new RegExp(channel.replace(/(\W)/, '\\$1'), 'i');
+
+    var Qjoin = this.whenReply("JOIN", 0, "", chanrx).addCallback(function(){
+        c.joined = true;
+        p.emitSuccess(c);
+        Qnotjoined.cancel();
+    });
+
+    function addName(pre, me, at, chan, names){
+        if(chan !== c.name)return;
+
+        var n = names.split(' ');
+        n.map(function(x){
+            return {
+                op: (x.indexOf('@')==0),
+                voice: (x.indexOf('+')==0),
+                nick: x.replace(/\+|@/,'')
+            };
+        });
+                
+        c.wholist.push.apply(c.wholist, n);
+    };
+
+    // receive names
+    this.addListener("353", addName);
+    var Qnames = this.whenReply("366").addCallback(function(pre, me, chan){
+        if(chan !== c.name)return;
+        client.removeListener("353", addName);
+    });
+
+    // receive topic
+    var Qtopic = this.whenReply("332").addCallback(function(pre, me, chan, topic){
+        if(chan !== c.name)return;
+        c.topic = topic;
+        Qnotopic.cancel();
+    });
+
+    var Qnotopic = this.whenReply("331").addCallback(function(pre, me, chan, topic){
+        if(chan.toLowerCase() !== c.name.toLowerCase())return;
+        Qtopic.cancel();
+    });
+
+    // could not join
+    var Qnotjoined = this.whenOneReplyOf([
+            "471", // channel is full
+            "473", // invite only
+            "474", // banned
+            "475"  // bad key
+            ]).addCallback(function(pre, me, chan, msg){
+        if(chan !== c.name)return;
+        sys.puts("could not join channel "+chan+", reason: "+msg);
+
+        client.removeListener("353", addName);
+        Qjoin.cancel();
+        Qnames.cancel();
+        Qtopic.cancel();
+        Qnotopic.cancel();
+    });
+
+    this.raw("JOIN", channel);
+
+    if(this.debug)p.debug = "join "+channel;
+
+    return p;
+};
+
+/**
+ * part the channel
+ * @param channel
+ * @return promise
+ */
+Client.prototype.part = function part(channel){
+    var p = this._promiseGiver.create(),
+        client = this;
+
+    this.whenReply("PART", 0, "", channel).addCallback(function(){
+        p.emitSuccess();
+        client._channels[channel] = undefined;
+    });
+
+    this.raw("PART", channel);
+    
+    return p;
+};
+
+/**
+ * update who list of channel.
+ * @param channel
+ * @return promise when end of who list is received
+ */
+Client.prototype.who = function who(channel){
+    var client = this,
+        p = this._promiseGiver.create(),
+        wholist = [];
+    
+    // listen for WHOREPLY
+    function addWho(pre, me, channel, user, host, server, nick, mode, hop_real){
+        hop_real = hop_real.match(/^(\d+) (.+)/);
+        wholist.push({
+            nick: nick,
+            user: user,
+            host: host,
+            server: server,
+            op: mode.indexOf("@")!==-1,
+            voice: mode.indexOf("+")!==-1,
+            away: mode.indexOf("G")!==-1,
+            hops: +hop_real[1],
+            realname: hop_real[2]
+        });    
+    };
+    this.addListener("352", addWho);
+
+    this.whenReply("315", 0, "", "", channel).addCallback(function(){
+        client.removeListener("352", addWho);
+        p.emitSuccess(wholist);
+    });
+
+    this.raw("WHO", channel);
+
+    if(this.debug)p.debug = "who "+channel;
+
+    return p;
+};
+
+/**
+ * reply to a CTCP command
+ */
+Client.prototype.replyCTCP = function replyCTCP(from, channel, msg){
+    if(!/^\01/.test(msg)) return;
+    var ctcp = msg.match(/^\01([A-Z]+) ?(.+)?\01/);
+    switch(ctcp[1]){
+        case 'VERSION':
+            channel.notice('\01VERSION '+this.version+'\01');
+            break;
+        case 'PING':
+            channel.notice(msg);
+            break;
+        case 'TIME':
+            channel.notice('\01TIME :'+new Date()+'\01');
+            break;
+        default:
+            // msg is cut off so we don't flood
+            channel.notice('\01ERRMSG '+msg.slice(0,-26)+' :unknown query\01');
+    }
+};
+

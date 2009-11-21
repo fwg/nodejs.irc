@@ -1,0 +1,1 @@
+Bot.Trigger(Bot.nick, ["*"])
