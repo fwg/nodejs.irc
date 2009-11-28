@@ -3,8 +3,10 @@
 
 var sys = require("sys"),
     tcp = require("tcp"),
-    Channel = require('./channel').Channel,
-    PromiseGiver = require('./promisegiver').PromiseGiver;
+    C = require('./channel'),
+    PG = require('../util/promisegiver'),
+    PR = require('../util/progress'),
+    U = require('./user');
 
 /**
  * create a client that connects to one irc server. pass arguments here or set later
@@ -38,7 +40,9 @@ Client.prototype.initialize = function initialize(host, port, nick, user, realna
     this.timeout = 60*60*1000;
 
     this._channels = {};
-    this._promiseGiver = new PromiseGiver();
+    this._promiseGiver = new PG.PromiseGiver();
+
+    this._users = {};
 
     this.debug = false;
 
@@ -125,6 +129,13 @@ Client.prototype.onMessage = function onMessage(args, cmd, from, one, two, three
             args[2] = c;
             c.emit.apply(c, args); 
             break;
+        case '332':
+        case 'TOPIC':
+            this.channel(one).topic = two;
+            break;
+        case '331': // RPL_NOTOPIC
+            this.channel(one).topic = "";
+            break;
     }
     this.emit.apply(this, args);
 };
@@ -153,10 +164,40 @@ Client.prototype.onClose = function() {
 Client.prototype.channel = function channel(chan){
     var c = chan.toLowerCase();
     if(!this._channels[c]){
-        return this._channels[c] = new Channel(chan, this);
+        return this._channels[c] = new C.Channel(chan, this);
     }
     return this._channels[c];
 };
+
+/**
+ * get the user object from a mask/nick
+ * @param mask full mask or nickname
+ * @return the user object
+ */
+Client.prototype.user = function user(mask){
+    // already a user obj
+    if(mask instanceof U.User) return mask;
+    if(!(typeof mask === "string" || mask instanceof String)){
+        throw new TypeError('mask should be a string');
+    }
+
+    var M = mask;
+    mask = mask.toLowerCase();
+
+    if(mask.indexOf('!')===-1){ // just a nickname
+        return this._users[mask] || (this._users[mask] = new U.User(M+"!.@."));
+    }
+    var match = mask.match(/(.+?)!.+?\@.+?/);
+    if(!match) throw new TypeError("Incomplete mask: "+M);
+    match = match[1];
+    var obj = this._users[match];
+    // likely by message from server so update the name and mask
+    if(obj){
+        obj.name = M.match(/(.+?)!.+?\@.+?/)[1];
+        obj.mask = M;
+    }
+    return obj || (this._users[match] = new U.User(M));
+}
 
 /**
  * send raw message to server
@@ -193,7 +234,7 @@ Client.prototype.parse = function parse(msg){
     if(match[3].indexOf(':') < 0){
         params = match[3].split(' ');
     }else{
-        params = match[3].match(/(.*?) ?:(.+)/);
+        params = match[3].match(/(.*?) ?:(.*)/);
         params = (params[1])
             ? params[1].split(' ').concat(params.slice(2,3))
             : params.slice(2,3);
@@ -256,7 +297,8 @@ Client.prototype.whenReply = function whenReply(reply, timeout){
 };
 
 /**
- * until one of the given replies is received
+ * until one of the given replies is received. callbacks are called with the reply as
+ * first parameter and the message arguments following.
  * @param replies array of reply commands
  * @param timeout when promise should be canceled. pass anything not > 0 to ignore.
  * @return promise
@@ -269,17 +311,21 @@ Client.prototype.whenOneReplyOf = function whenOneReplyOf(replies, timeout){
         p.timeout(+timeout);
     }
 
-    function waiter(){
-        p.emitSuccess.apply(p, arguments);
+    function Waiter(reply){
+        return function waiter(){
+            p.emitSuccess.apply(p, [reply].concat(arguments));
+        };
     }
 
+    var waiter = [];
     for(var i=replies.length;--i>-1;){
-        this.addListener(replies[i], waiter);
+        waiter[i] = Waiter(replies[i]);
+        this.addListener(replies[i], waiter[i]);
     }
 
     function cleanup(){
         for(var i=replies.length;--i>-1;){
-            client.removeListener(replies[i], waiter);
+            client.removeListener(replies[i], waiter[i]);
         }
     };
 
@@ -329,79 +375,89 @@ Client.prototype.notice = function notice(channel, msg){
 };
 
 /**
- * @param channel to join
- * @param callback optional. will be called when the channel is joined
- * @return promise when channel is joined. callback argument is the channel obj.
+ * @param channels to join. array or string for just one.
+ * @param [keys] for the channels. also may be just a string for one channel.
+ * @return progresser that finishes when all channels were joined or not.
+ *         if they could be joined, the argument is the channel object,
+ *         in the error case it is an array [replycode, chan, msg]
  */
-Client.prototype.join = function join(channel /*, callback*/){
-    var c = this.channel(channel),
-        p = this._promiseGiver.create(),
+Client.prototype.join = function join(channels, keys){
+    if(!(channels instanceof Array)) channels = [channels];
+    if(!(keys instanceof Array)) keys = [keys];
+
+    var pg = this._promiseGiver,
         client = this;
 
-    if(arguments[1])p.addCallback(arguments[1]);
+    function NamesReceiver(channel, namelist){
+        return function addNames(pre, me, at, chan, names){
+            if(chan !== channel)return;
 
-    var chanrx = new RegExp(channel.replace(/(\W)/, '\\$1'), 'i');
+            var n = names.split(' ');
+            n.map(function(x){
+                return {
+                    op: (x.indexOf('@')==0),
+                    voice: (x.indexOf('+')==0),
+                    nick: x.replace(/\+|@/,'')
+                };
+            });
+                    
+            namelist.push.apply(namelist, n);
+        };
+    }
 
-    var Qjoin = this.whenReply("JOIN", 0, "", chanrx).addCallback(function(){
-        c.joined = true;
-        p.emitSuccess(c);
-        Qnotjoined.cancel();
-    });
+    function setupPromises(channel, key){
+        var chanrx = new RegExp(channel.replace(/(\W)/, '\\$1'), 'i'),
+            c = client.channel(channel),
+            p = pg.create();
 
-    function addName(pre, me, at, chan, names){
-        if(chan !== c.name)return;
-
-        var n = names.split(' ');
-        n.map(function(x){
-            return {
-                op: (x.indexOf('@')==0),
-                voice: (x.indexOf('+')==0),
-                nick: x.replace(/\+|@/,'')
-            };
+        var Qjoin = client.whenReply("JOIN", 0, "", chanrx).addCallback(function(){
+            c.joined = true;
+            c.key = key;
+            p.emitSuccess(c);
+            Qnotjoined.cancel();
         });
-                
-        c.wholist.push.apply(c.wholist, n);
+
+        var names = [];
+        var addName = NamesReceiver(channel, names);
+
+        // receive names
+        client.addListener("353", addName);
+        // end of names
+        var Qnames = client.whenReply("366").addCallback(function(pre, me, chan){
+            if(chan !== c.name)return;
+            client.removeListener("353", addName);
+        });
+
+        // topic responses 331 and 332 are handled in onMessage
+
+        // could not join
+        var Qnotjoined = client.whenOneReplyOf([
+                "471", // channel is full
+                "473", // invite only
+                "474", // banned
+                "475"  // bad key
+                ]).addCallback(function(reply, pre, me, chan, msg){
+            if(c.name !== chan) return;
+            if(client.debug)sys.puts("could not join channel "+chan+", reason: "+msg);
+
+            client.removeListener("353", addName);
+            Qjoin.cancel();
+            Qnames.cancel();
+            p.emitError.call(p, reply, chan, msg);
+        });
+
+        if(client.debug)p.debug = "join "+channel;
+        
+        return p;
     };
-
-    // receive names
-    this.addListener("353", addName);
-    var Qnames = this.whenReply("366").addCallback(function(pre, me, chan){
-        if(chan !== c.name)return;
-        client.removeListener("353", addName);
-    });
-
-    // receive topic
-    var Qtopic = this.whenReply("332").addCallback(function(pre, me, chan, topic){
-        if(chan !== c.name)return;
-        c.topic = topic;
-        Qnotopic.cancel();
-    });
-
-    var Qnotopic = this.whenReply("331").addCallback(function(pre, me, chan, topic){
-        if(chan.toLowerCase() !== c.name.toLowerCase())return;
-        Qtopic.cancel();
-    });
-
-    // could not join
-    var Qnotjoined = this.whenOneReplyOf([
-            "471", // channel is full
-            "473", // invite only
-            "474", // banned
-            "475"  // bad key
-            ]).addCallback(function(pre, me, chan, msg){
-        if(chan !== c.name)return;
-        sys.puts("could not join channel "+chan+", reason: "+msg);
-
-        client.removeListener("353", addName);
-        Qjoin.cancel();
-        Qnames.cancel();
-        Qtopic.cancel();
-        Qnotopic.cancel();
-    });
-
-    this.raw("JOIN", channel);
-
-    if(this.debug)p.debug = "join "+channel;
+    
+    var p = new PR.Progress;
+    
+    for(var i=0, c, l=channels.length; c=channels[i], i<l; i++){
+        p.add(setupPromises(c, keys[i]));
+    }
+    
+    this.raw("JOIN", channels.join(',')+' '+keys.join(','));
 
     return p;
 };
@@ -421,6 +477,8 @@ Client.prototype.part = function part(channel){
     });
 
     this.raw("PART", channel);
+    
+    if(this.debug)p.debug = "part "+channel;
     
     return p;
 };

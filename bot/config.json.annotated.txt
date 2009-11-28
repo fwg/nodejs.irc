@@ -1,17 +1,19 @@
-// this is not a valid json file. use config.json instead
 {
-  host: "127.0.0.1", // the host fqdn
-  port: 6667, // the port
-  nick: null, // the nickname, here null to use the client default of a half-random one.
-  user: null, // the username reported to the irc server
-  realname: null, // the real name sent to the irc server
-  botstats: "./bot.stats", // the file where bot statistics and module properties can be saved 
+  "host": "127.0.0.1", // the host fqdn
+  "port": 6667, // the port
+  "nick": null, // the nickname, here null to use the client default of a half-random one.
+  "user": null, // the username reported to the irc server
+  "realname": null, // the real name sent to the irc server
+  "autojoin": ['#ss'], // which channels to jon automagically
+  "locale": "de", // general language setting used for bot output
+  "botstats": "./bot.stats", // the file where bot statistics and module properties can be saved 
                            // when unloading the bot
-  moduledir: "./modules", // module directory
-  autoload: ['beer'], // which modules to load at startup
-  modules: { // module configurations
+  "autosave-interval": 60000, // interval of saving the statistics e.g. one minute
+  "moduledir": "./modules", // module directory
+  "autoload": ['beer'], // which modules to load at startup
+  "modules": { // module configurations
     "beer": { // see modules/beer.js
-      options: {
+      "options": {
         "drunk": 3 // amount of bottles before one is drunk
       }
     }

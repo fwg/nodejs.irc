@@ -1,4 +1,5 @@
-var Client = require('../irc/client').Client,
+var C = require('../irc/client'),
+    U = require('./user'),
     file = require('posix'),
     sys = require('sys');
 
@@ -10,7 +11,7 @@ var Bot = exports.Bot = function Bot(config){
     this.initialize(config);
 }; 
 
-sys.inherits(Bot, Client);
+sys.inherits(Bot, C.Client);
 
 /**
  * the object initialization
@@ -30,16 +31,38 @@ Bot.prototype.initialize = function initialize(config){
     Bot.super_.initialize.call(this, c.host, c.port, c.nick, c.user, c.realname);
 
     this._config = c;
-    this._modules = [];
+    this._modules = {};
 
     this._triggers = {};
     this._triggers.PRIV = [];
     this._triggers['*'] = [];
 
-    this._users = {};
-
     // load initial modules
-    this.load(c.autoload);
+    try{
+      this.load(c.autoload).wait();
+    }catch(e){
+      sys.puts(e.message);
+      process.exit(1);
+    }
+
+    // dispatch does all the fun
+    this.addListener("PRIVMSG", this.dispatch);
+
+    // join configured channels
+    var bot = this;
+    var chansWithKey = [], chansWithoutKey = [], keys = [];
+    for(var i=0, chans=c.autojoin, chan, l=chans.length; i<l; i++){
+        chan = chans[i];
+        if(c.channels[chan] && c.channels[chan].key){
+            chansWithKey.push(chan);
+            keys.push(c.channels[chan].key);
+            continue;
+        }
+        chansWithoutKey.push(chan);
+    }
+    this.addListener("001", function(){
+        bot.join(chansWithKey.concat(chansWithoutKey), keys);
+    });
 };
 
 /**
@@ -54,85 +77,41 @@ Bot.prototype.module = function module(name, obj){
     return this._modules[name];
 };
 
-/**
- * identifying a user
- * @param nick the nickname
- * @param mask a full mask
- */
-function User(nick, mask){
-    this.nick = nick;
-    this.name = mask.match(/(.+?)!.+?\@.+?/)[1];
-    this.mask = mask;
-    this.level = 1;
-
-    this.groups = [];
-    this.groups.lastChecked = 0;
-}
-
-/**
- * function that searches for matches in the rules
- */
-User.prototype.match = function match(rules){
-    // check which groups we are in
-    // if there are different groups than last time we checked
-    var g = this.groups;
-    if(groupsDirtyTime > g.lastChecked){
-        var m = this.mask;
-        g.splice(0);
-        for(var i=0, group; group = groups[i]; i++){
-            if(group.test(m)) g.push(group);
-        }
-        this.groups.lastChecked = new Date();
-    }
-    // now check rules for either us or one of the groups
-    for(var i=0, rule; rule = rules[i]; i++){
-        if(rule === this || this.groups.indexOf(rule)!==-1)
-            return true;
-    }
-};
 
 var groups = [];
-var groupsDirtyTime; // timestamp when last a group was added
+groups.dirtyTime = new Date(); // timestamp when last a group was added
 // yes, make sexy time. dirty dirty. FIXME facetious variable name!! 
 //
 // NOT!
 
 /**
- * @param name can be a nickname or a mask maybe with * wildcard or a regex
- * @return a user object that identifies a user or a regex for more users
+ * create and/or store a group or create a user object.
+ * @param name can be a nickname or a mask maybe with * wildcard or a regex, preferably 
+ *             with i modifier.
+ * @return a user object if given a nick or complete mask, else a regex
  */
-Bot.prototype.user = function user(name){
-    // already a user obj
-    if(name.name) return name;
-    // preserve with case for later pass on to User
-    var n = name;
-
+Bot.prototype.group = function group(name){
+    var regex;
     if(!(name instanceof RegExp)){
-        name = name.toLowerCase();
-        if(name.indexOf('!')===-1){ // just a nickname
-            return this._users[name] || (this._users[name] = new User(name, n+"!.@."));
-        }else if(name.indexOf('*')!==-1){
-            // push a mask regex 
-            name = new RegExp("^"+
-                name.replace(/(\.|\@|\!)/g,'\\$1')
-                    .replace(/\*/g, '.*?')
-                +"$"
-            );
-            groups.push(name);
-            groupsDirty = new Date();
+        if(name.indexOf('*')!==-1){
+            name = name.toLowerCase();
+            // create a mask regex 
+            name = "^" + name.replace(/([^\w*])/g,'\\$1').replace(/\*/g, '.*?') + "$";
+            regex = new RegExp(name, "i");
+            groups["/"+name+"/i"] = regex;
+            name = regex;
         }else{
-            // full mask provided 
-            var nick = name.match(/(.+?)!.+?\@.+?/)[1];
-            if(!nick) throw new TypeError("Incomplete mask: "+name);
-            var obj = this._users[nick];
-            // likely by message from server so update the name from n
-            if(obj) obj.name = n.match(/(.+?)!.+?\@.+?/)[1];
-            return obj || (this._users[nick] = new User(nick, n));
+            return this.user(name);
         }
-    }else{
-        groups.push(name);
-        groupsDirty = new Date();
     }
+    if(!name.ignoreCase){
+        name = name.toString().match(/^\/(.*?)\/\w*$/)[1];
+        regex = new RegExp(name, "i");
+        groups["/"+name+"/i"] = regex;
+        name = regex;
+    }
+    groups.push(name);
+    groups.dirtyTime = new Date();
     return name;
 }
 
@@ -147,6 +126,8 @@ Bot.prototype.load = function load(names){
     var p = this._promiseGiver.create(),
         bot = this;
     var i = 0, l = names.length - 1;
+    
+    if(this.debug)p.debug = "load "+names.toString();
 
     function loadone(module){
         var name = names[i];
@@ -162,18 +143,30 @@ Bot.prototype.load = function load(names){
 
         if(i < l){
             i++;
-            file.cat(bot._config.moduldedir+'/'+names[i]+'.js').addCallback(loadone);
+            file.cat(bot._config.moduledir+'/'+names[i]+'.js')
+                .addErrback(error)
+                .addCallback(loadone);
         }else{
             p.emitSuccess();
         }
     }
+    function error(e){
+        p.emitError(e);
+    }
 
-    file.cat(this._config.moduledir+'/'+names[i]+'.js').addErrback(function(){
-            sys.puts("module "+names[i]+" could not be loaded");
-        }).addCallback(loadone);
+    file.cat(this._config.moduledir+'/'+names[i]+'.js')
+        .addErrback(error)
+        .addCallback(loadone);
 
     return p;
 };
+
+/**
+ * check if a module has been loaded
+ */
+Bot.prototype.isLoaded = function isLoaded(name){
+    return !!this._modules[name];
+}
 
 /**
  * dispatch looks for a trigger to apply.
@@ -193,11 +186,14 @@ Bot.prototype.dispatch = function dispatch(from, channel, msg){
         for(var i=0, ts=this._triggers['*']; t = ts[i]; i++){
             if(t.trigger.test(msg)) break;
         }
+    }
     if(!t){
         return;
     }
 
-    if(this.checkPermission(t, channel, this.user(from))){
+    from = this.user(from);
+
+    if(this.checkPermission(t, channel, from)){
         t.emit("match", from, channel, msg);
     }
 };
@@ -230,17 +226,17 @@ Bot.prototype.checkPermission = function checkPermission(cmd, channel, user){
  * add a deny rule
  * @param cmd     the trigger/command/whatever that is being accessed
  * @param channel the channel object this is anticipated to happen on
- * @param user    user object or string that is passed on to Bot.prototype.user
+ * @param group   group/user or argument for Bot.prototype.group
  */
-Bot.prototype.addDenyRule = function addDenyRule(cmd, channel, user){
-    user = this.user(user);
+Bot.prototype.addDenyRule = function addDenyRule(cmd, channel, group){
+    user = this.group(group);
     channel = this.channel(chanel);
 
     var rules = this._denyRules[channel.name];
     if(!rules[cmd.id]){
-        rules[cmd.id] = [user];
+        rules[cmd.id] = [group];
     }else{
-        rules[cmd.id].push(user); 
+        rules[cmd.id].push(group); 
     }
     return this;
 };
@@ -305,3 +301,20 @@ Trigger.prototype.addCallback = function (f){
     this.addListener("match", f);
 };
 
+/**
+ * if the i18n object has a translation it is returned. chain yout own i18n obj with
+ * the bot i18n with obj.prototype = Bot.i18nObj
+ * @param l10n the i18n object
+ * @param string
+ * @param 
+ */
+Bot.prototype.i18n = function i18n(l10n, string, locale){
+    var transl;
+    if(transl = l10n[string][this.locale] && typeof transl.valueOf() === 'string')
+        return transl.valueOf();
+    return string;
+};
+
+Bot.prototype.i18nObj = {
+    'and':{de:'und'}
+};
