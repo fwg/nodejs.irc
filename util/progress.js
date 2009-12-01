@@ -22,6 +22,8 @@ var sys = require('sys');
  * write the content in order.
  * if e.g. file1 was not found, it will not be printed to stdout and cfile1 will be 
  * the error object.
+ * @name Progress
+ * @constructor
  */
 var Progress = exports.Progress = function Progress(){
     this.initialize();
@@ -54,8 +56,8 @@ Progress.prototype.handler = function(event){
 };
 
 /**
- * @param thing anything that supports addCallback, addErrback, addCancelback,
- * and cancel.
+ * @param thing anything that supports at minimum addCallback. addErrback, addCancelback,
+ * and cancel are optional and add functionality.
  */
 Progress.prototype.add = function add(thing){
     this._actions.push(thing);
@@ -65,11 +67,11 @@ Progress.prototype.add = function add(thing){
 };
 
 /**
- * cancel the rest of the actions.
+ * cancel the rest of the actions. of course only works with things that support .cancel()
  */
 Progress.prototype.cancelRest = function(){
     for(var i=0, a, actions=this._actions, l=actions.length; i < l; i++){
-        if(!a = actions[i]) continue;
+        if((!a = actions[i]) || (!"cancel" in a) || (typeof a.cancel !== 'function')) continue;
         a.cancel.apply(a, arguments);
     }
 };
@@ -80,9 +82,7 @@ Progress.prototype.cancelRest = function(){
  */
 Progress.prototype.finish = function(){
     if(this._left) this.cancelRest();
-    this.emit.apply("finish", this._results.slice());
-    this._results.splice(0);
-    this._actions.splice(0);
+    this.emit.apply("finish", this._results);
     this._left = 0;
 };
 
