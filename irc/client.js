@@ -16,6 +16,8 @@ var sys = require("sys"),
  * @param user the username
  * @param realname 
  * @see Client.prototype.initialize
+ * @constructor
+ * @name Client
  */
 var Client = exports.Client = function Client(host, port, nick, user, realname){
     this.initialize(host, port, nick, user, realname);
@@ -31,7 +33,7 @@ Client.prototype.initialize = function initialize(host, port, nick, user, realna
     this.host = host || "127.0.0.1";
     this.port = port || 6667;
     this.nick = nick || "NodeJSIRC"+Math.floor(Math.random()*1000);
-    this.user = user || "nodejs";
+    this.username = user || "nodejs";
     this.realname = realname || "NodeJS.IRC";
 
     this.connection = null;
@@ -88,7 +90,7 @@ Client.prototype.disconnect = function disconnect(reason){
 // 
 Client.prototype.onConnect = function onConnect(){
     this.raw("NICK", this.nick);
-    this.raw("USER", this.user, '0', '*', ':'+this.realname);
+    this.raw("USER", this.username, '0', '*', ':'+this.realname);
 
     this.emit("connect");
 };
@@ -184,7 +186,7 @@ Client.prototype.user = function user(mask){
     var M = mask;
     mask = mask.toLowerCase();
 
-    if(mask.indexOf('!')===-1){ // just a nickname
+    if(/^[a-zA-Z]([a-zA-Z0-9_\-\[\]\\`^{}]+)/.test(mask)){ // just a nickname
         return this._users[mask] || (this._users[mask] = new U.User(M+"!.@."));
     }
     var match = mask.match(/(.+?)!.+?\@.+?/);
@@ -359,7 +361,7 @@ Client.prototype.reconnect = function reconnect(reason){
 
 /**
  * send a privmsg to a channel or another client
- * @param channel the channel or nick
+ * @param channel the channel or nick - string
  * @param msg the message
  */
 Client.prototype.privmsg = function privmsg(channel, msg){
@@ -393,11 +395,15 @@ Client.prototype.join = function join(channels, keys){
             if(chan !== channel)return;
 
             var n = names.split(' ');
-            n.map(function(x){
+            // actually only hack for ryans ircd script, too lazy to fix and who knows..
+            n = n.filter(function(x){return x});
+            n = n.map(function(x){
                 return {
-                    op: (x.indexOf('@')==0),
-                    voice: (x.indexOf('+')==0),
-                    nick: x.replace(/\+|@/,'')
+                    user: client.user(x.replace(/\+|@/,'')),
+                    mode: { 
+                      op: (x.indexOf('@')==0),
+                      voice: (x.indexOf('+')==0)
+                    }
                 };
             });
                     
@@ -426,6 +432,17 @@ Client.prototype.join = function join(channels, keys){
         var Qnames = client.whenReply("366").addCallback(function(pre, me, chan){
             if(chan !== c.name)return;
             client.removeListener("353", addName);
+            // empty channel wholist
+            c.wholist.splice(0);
+            for(var p in c.wholist){
+                c.wholist[p] = undefined;
+            }
+            // add names to the channels wholist
+            c.wholist.push.apply(c.wholist, names);
+            names.forEach(function(x){
+                c.wholist.push(x.user);
+                c.wholist[x.user.nick] = x.mode;
+            });
         });
 
         // topic responses 331 and 332 are handled in onMessage
@@ -496,16 +513,21 @@ Client.prototype.who = function who(channel){
     // listen for WHOREPLY
     function addWho(pre, me, channel, user, host, server, nick, mode, hop_real){
         hop_real = hop_real.match(/^(\d+) (.+)/);
+        var u = client.user(nick);
+        u.user = user;
+        u.host = host;
+        u.mask = u.name+'!'+u.user+'@'+u.host;
+        u.server = server;
+        u.awat = mode.indexOf("G")!==-1;
+        u.hops = +hop_real[1];
+        u.realname = hop_real[2];
+
         wholist.push({
-            nick: nick,
-            user: user,
-            host: host,
-            server: server,
-            op: mode.indexOf("@")!==-1,
-            voice: mode.indexOf("+")!==-1,
-            away: mode.indexOf("G")!==-1,
-            hops: +hop_real[1],
-            realname: hop_real[2]
+            user: u,
+            mode: {
+              op: mode.indexOf("@")!==-1,
+              voice: mode.indexOf("+")!==-1
+            }
         });    
     };
     this.addListener("352", addWho);

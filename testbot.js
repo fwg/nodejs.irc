@@ -1,5 +1,5 @@
 
-var Bot = require('./bot').Bot,
+var Bot = require('./bot/bot').Bot,
     sys = require('sys');
 
 var bot = new Bot('./config_qnet.json');

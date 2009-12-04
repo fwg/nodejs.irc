@@ -3,6 +3,8 @@ var Promise = process.Promise;
 /**
  * PromiseGiver is an abstraction for managing promises,
  * allowing for cancelation in case of destruction.
+ * @constructor
+ * @name PromiseGiver
  */
 var PromiseGiver = exports.PromiseGiver = function PromiseGiver(){
     this._pendingPromises = [];

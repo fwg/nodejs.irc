@@ -6,9 +6,8 @@
   "realname": null, // the real name sent to the irc server
   "autojoin": ['#ss'], // which channels to jon automagically
   "locale": "de", // general language setting used for bot output
-  "botstats": "./bot.stats", // the file where bot statistics and module properties can be saved 
-                           // when unloading the bot
-  "autosave-interval": 60000, // interval of saving the statistics e.g. one minute
+  "botstorage": "./storage.json", // the file for the simple key-value store
+  "autosave-interval": 60000, // interval of saving the data automatically
   "moduledir": "./modules", // module directory
   "autoload": ['beer'], // which modules to load at startup
   "modules": { // module configurations

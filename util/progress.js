@@ -62,7 +62,9 @@ Progress.prototype.handler = function(event){
 Progress.prototype.add = function add(thing){
     this._actions.push(thing);
     this._left++;
-    thing.addCallback(this.success).addErrback(this.error).addCancelback(this.cancel);
+    thing.addCallback(this.success);
+    if("addErrback" in thing && typeof thing.addErrback === 'function') thing.addErrback(this.error);
+    if("addCancelback" in thing && typeof thing.addCancelback === 'function') thing.addCancelback(this.cancel);
     return this;
 };
 

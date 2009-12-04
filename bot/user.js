@@ -3,12 +3,18 @@ var U = require('../irc/user'),
 
 /** 
  * we extend User for groups, userlevels etc
+ * @name Bot.User
+ * @constructor
  */
 function User(mask){
     this.initialize(mask);
 }
 sys.inherits(User, U.User);
 
+/**
+ * init Bot.User
+ * @name Bot.User.prototype.initialize
+ */
 User.prototype.initialize = function inititalize(mask){
     User.super_.initialize.call(this, mask);
 
@@ -16,6 +22,10 @@ User.prototype.initialize = function inititalize(mask){
     this.groups.lastChecked = 0;
 }
 
+/**
+ * updates the list of groups this user is in.
+ * @name Bot.User.prototype.maybeUpdateGroups
+ */
 User.prototype.maybeUpdateGroups = function maybeUpdateGroups(groups){
     // check which groups we are in
     // if there are different groups than last time we checked
@@ -30,13 +40,5 @@ User.prototype.maybeUpdateGroups = function maybeUpdateGroups(groups){
     }
 }
 
-/**
- * function that searches for matches in rules
- */
-User.prototype.match = function match(rules){
-    // now check rules for either user or one of the groups
-    for(var i=0, rule; rule = rules[i]; i++){
-        if(rule === this || this.groups.indexOf(rule)!==-1)
-            return true;
-    }
-};
+// override user constructor
+U.User = User;

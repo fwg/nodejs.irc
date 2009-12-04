@@ -4,11 +4,17 @@ var sys = require('sys');
  * identifying a user
  * @param nick the nickname
  * @param mask a full mask
+ * @name User
+ * @constructor
  */
 var User = exports.User = function User(mask){
     this.initialize(mask);
 }
 
+/**
+ * init with mask
+ * @name User.initialize
+ */
 User.prototype.initialize = function (mask){
     var match = mask.match(/(.+?)!(.+?)\@(.+?)/);
     this.name = match[1]; 

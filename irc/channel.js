@@ -2,11 +2,15 @@
 
 var sys = require('sys');
 
+/**
+ * represents a channel. can be used to send messages, see who is in the channel and so on.
+ * @constructor
+ * @name Channel
+ */
 var Channel = exports.Channel = function Channel(name, client){
   	this.name = name;
   	this.client = client;
 	this.wholist = [];
-    this.names = [];
     this.joined = false;
 };
 
@@ -48,7 +52,13 @@ Channel.prototype.who = function who(){
         // here no simple chan.list = list because we want code that holds
         // a reference to the list work with the updated one as well
         channel.wholist.splice(0);
-        channel.wholist.push.apply(channel.wholist, list);
+        for(var p in channel.wholist){
+            channel.wholist[p] = undefined;
+        }
+        list.forEach(function(x){
+            channel.wholist.push(x.user);
+            channel.wholist[x.user.nick] = x.mode;
+        });
     });
 };
 
