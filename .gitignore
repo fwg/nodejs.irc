@@ -1,2 +1,4 @@
 .*.swp
 *~
+storage.json
+config_qnet.json
