@@ -22,6 +22,10 @@ sys.inherits(Bot, C.Client);
 Bot.prototype.initialize = function initialize(config){
     Bot.super_.initialize.call(this, config.host, config.port, config.nick, 
                                                     config.user, config.realname);    
+
+    this._triggers = {};
+    this._triggers.PRIV = [];
+    this._triggers['*'] = [];
 };
 
 /**

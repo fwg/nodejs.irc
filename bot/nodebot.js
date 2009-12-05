@@ -36,10 +36,6 @@ NodeBot.prototype.initialize = function(config) {
     this._config = c;
     this._modules = {};
 
-    this._triggers = {};
-    this._triggers.PRIV = [];
-    this._triggers['*'] = [];
-
     this._denyRules = {};
     this._allowRules = {};
 
