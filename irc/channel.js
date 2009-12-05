@@ -34,7 +34,7 @@ Channel.prototype.msg = function msg(text){
 };
 
 /**
- * send a notice to the chanel
+ * send a notice to the channel
  * @param text
  */
 Channel.prototype.notice = function notice(text){
