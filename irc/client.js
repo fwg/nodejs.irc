@@ -116,27 +116,38 @@ Client.prototype.onReceive = function onReceive(chunk){
 };
 
 Client.prototype.onMessage = function onMessage(args, cmd, from, one, two, three){
+    var c // channel
+        ,u; // user
     switch(cmd){
         case 'PING':
             this.raw("PONG", one);
             break;
         case 'PRIVMSG':
+            u = this.user(from);
             // direct message
             if(one.toLowerCase() == this.nick.toLowerCase()){
-                one = from.match(/^([^!]+)!.*/)[1];
+                c = this.channel(u.name);
+                if(c.listeners('PRIVMSG').indexOf(this.replyCTCP)<0){
+                    c.addListener('PRIVMSG', this.replyCTCP);
+                }
+            }else{
+                c = this.channel(one);
             }
-            // replace channel name with ch. obj
-            var c = this.channel(one);
-            c.addListener('PRIVMSG', this.replyCTCP);
-            args[2] = c;
+            args[2] = c.name;
             c.emit.apply(c, args); 
             break;
-        case '332':
+        case '332': // RPL_TOPIC
         case 'TOPIC':
             this.channel(one).topic = two;
             break;
         case '331': // RPL_NOTOPIC
             this.channel(one).topic = "";
+            break;
+        case 'JOIN':
+            this.channel(one).emit('JOIN', this.user(from));
+            break;
+        case 'PART':
+            this.channel(one).emit('PART', this.user(from));
             break;
     }
     this.emit.apply(this, args);
@@ -155,68 +166,8 @@ Client.prototype.onClose = function() {
 };
 
 //
-// base functionality
+// meta functionality
 //
-
-/**
- * get the channel object of channel chan, if not present, create it
- * @param chan the channel name
- * @return the channel object
- */
-Client.prototype.channel = function channel(chan){
-    var c = chan.toLowerCase();
-    if(!this._channels[c]){
-        return this._channels[c] = new C.Channel(chan, this);
-    }
-    return this._channels[c];
-};
-
-/**
- * get the user object from a mask/nick
- * @param mask full mask or nickname
- * @return the user object
- */
-Client.prototype.user = function user(mask){
-    // already a user obj
-    if(mask instanceof U.User) return mask;
-    if(!(typeof mask === "string" || mask instanceof String)){
-        throw new TypeError('mask should be a string');
-    }
-
-    var M = mask;
-    mask = mask.toLowerCase();
-
-    if(/^[a-zA-Z]([a-zA-Z0-9_\-\[\]\\`^{}]+)/.test(mask)){ // just a nickname
-        return this._users[mask] || (this._users[mask] = new U.User(M+"!.@."));
-    }
-    var match = mask.match(/(.+?)!.+?\@.+?/);
-    if(!match) throw new TypeError("Incomplete mask: "+M);
-    match = match[1];
-    var obj = this._users[match];
-    // likely by message from server so update the name and mask
-    if(obj){
-        obj.name = M.match(/(.+?)!.+?\@.+?/)[1];
-        obj.mask = M;
-    }
-    return obj || (this._users[match] = new U.User(M));
-}
-
-/**
- * send raw message to server
- * @param cmd the command, PRIVMSG, JOIN etc
- * @param ... all the rest arguments are joined into one message
- */
-Client.prototype.raw = function raw(cmd){
-    if(this.connection.readyState !== "open"){
-        return this.disconnect("cannot send with readyState "+this.connection.readyState);
-    }
-
-    var msg = Array.prototype.slice.call(arguments,1).join(' ') +"\r\n";
-
-    if(this.debug)sys.puts('>'+ cmd +' '+ msg);
-
-    this.connection.send(cmd+ " " +msg, this.encoding);
-};
 
 /**
  * parse an incoming message
@@ -224,7 +175,7 @@ Client.prototype.raw = function raw(cmd){
  * @return an object with .cmd, .prefix and space-split message parameters in .params
  */
 Client.prototype.parse = function parse(msg){
-    var match = msg.match(/(?::(\S+) )?(\S+) (.+)/);
+    var match = msg.match(/(?::?) ?(\S+) ?(\S+) (.+)/);
     var parsed = {
         prefix: match[1],
         cmd: match[2]
@@ -339,6 +290,68 @@ Client.prototype.whenOneReplyOf = function whenOneReplyOf(replies, timeout){
 };
 
 /**
+ * get the channel object of channel chan, if not present, create it
+ * @param chan the channel name
+ * @return the channel object
+ */
+Client.prototype.channel = function channel(chan){
+    var c = chan.toLowerCase();
+    if(!this._channels[c]){
+        return this._channels[c] = new C.Channel(chan, this);
+    }
+    return this._channels[c];
+};
+
+/**
+ * get the user object from a mask/nick
+ * @param mask full mask or nickname
+ * @return the user object
+ * @throws TypeError when given an incomplete mask that is not a nick
+ */
+Client.prototype.user = function user(mask){
+    // already a user obj
+    if(mask instanceof U.User) return mask;
+    if(!(typeof mask === "string" || mask instanceof String)){
+        throw new TypeError('mask should be a string');
+    }
+
+    var M = mask;
+    mask = mask.toLowerCase();
+
+    if(/^[a-zA-Z]([a-zA-Z0-9_\-\[\]\\`^{}]+)$/.test(mask)){ // just a nickname
+        return this._users[mask] || (this._users[mask] = new U.User(M+"!.@."));
+    }
+    var match = mask.match(/([^!]+)![^@]+@.+/);
+    if(!match) throw new TypeError("Erroneus (incomplete?) mask: "+M);
+    match = match[1];
+    var obj = this._users[match];
+    // likely by message from server so update info
+    if(obj) obj.updateFromMask(mask);
+    return obj || (this._users[match] = new U.User(M));
+}
+
+//
+// irc funcs
+//
+
+/**
+ * send raw message to server
+ * @param cmd the command, PRIVMSG, JOIN etc
+ * @param ... all the rest arguments are joined into one message
+ */
+Client.prototype.raw = function raw(cmd){
+    if(this.connection.readyState !== "open"){
+        return this.disconnect("cannot send with readyState "+this.connection.readyState);
+    }
+
+    var msg = Array.prototype.slice.call(arguments,1).join(' ') +"\r\n";
+
+    if(this.debug)sys.puts('>'+ cmd +' '+ msg);
+
+    this.connection.send(cmd+ " " +msg, this.encoding);
+};
+
+/**
  * quit
  */
 Client.prototype.quit = function quit(reason){
@@ -399,7 +412,7 @@ Client.prototype.join = function join(channels, keys){
             n = n.filter(function(x){return x});
             n = n.map(function(x){
                 return {
-                    user: client.user(x.replace(/\+|@/,'')),
+                    user: client.user(x.replace(/^[^a-zA-Z]+/,'')),
                     mode: { 
                       op: (x.indexOf('@')==0),
                       voice: (x.indexOf('+')==0)
@@ -412,12 +425,11 @@ Client.prototype.join = function join(channels, keys){
     }
 
     function setupPromises(channel, key){
-        var chanrx = new RegExp(channel.replace(/(\W)/, '\\$1'), 'i'),
+        var chanrx = new RegExp(channel.replace(/\W/g, '\\$&'), 'i'),
             c = client.channel(channel),
             p = pg.create();
 
         var Qjoin = client.whenReply("JOIN", 0, "", chanrx).addCallback(function(){
-            c.joined = true;
             c.key = key;
             p.emitSuccess(c);
             Qnotjoined.cancel();
@@ -455,15 +467,16 @@ Client.prototype.join = function join(channels, keys){
                 "475"  // bad key
                 ]).addCallback(function(reply, pre, me, chan, msg){
             if(c.name !== chan) return;
-            if(client.debug)sys.puts("could not join channel "+chan+", reason: "+msg);
+            if(client.debug) sys.puts("could not join channel "+chan+", reason: "+msg);
 
             client.removeListener("353", addName);
             Qjoin.cancel();
             Qnames.cancel();
+            chan = client.channel(chan);
             p.emitError.call(p, reply, chan, msg);
         });
 
-        if(client.debug)p.debug = "join "+channel;
+        if(client.debug) p.debug = "join "+channel;
         
         return p;
     };
@@ -550,6 +563,7 @@ Client.prototype.who = function who(channel){
 Client.prototype.replyCTCP = function replyCTCP(from, channel, msg){
     if(!/^\01/.test(msg)) return;
     var ctcp = msg.match(/^\01([A-Z]+) ?(.+)?\01/);
+    channel = this.channel(channel);
     switch(ctcp[1]){
         case 'VERSION':
             channel.notice('\01VERSION '+this.version+'\01');
@@ -559,6 +573,8 @@ Client.prototype.replyCTCP = function replyCTCP(from, channel, msg){
             break;
         case 'TIME':
             channel.notice('\01TIME :'+new Date()+'\01');
+            break;
+        case 'ACTION':
             break;
         default:
             // msg is cut off so we don't flood

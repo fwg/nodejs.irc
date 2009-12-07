@@ -9,18 +9,44 @@ var sys = require('sys');
  */
 var Channel = exports.Channel = function Channel(name, client){
   	this.name = name;
-  	this.client = client;
+  	this._client = client;
 	this.wholist = [];
     this.joined = false;
+    this.topic = "";
 };
 
 sys.inherits(Channel, process.EventEmitter);
+
+//
+// automagic
+//
+/**
+ * parts
+ */
+Channel.prototype.onPart = function(user){
+    this.wholist.splice(this.wholist.indexOf(user), 1);
+    this.wholist[user.nick] = undefined;
+    user.channels.splice(user.channels.indexOf(this.name), 1):
+}
+
+/**
+ * join, change the user's channel list
+ */
+Channel.prototype.onJoin = function(user){
+    if(this.wholist.indexOf(user)<0){
+        this.wholist.push(user);
+        this.wholist[user.nick] = {op: false, voice: false};
+    }
+    if(!user.channels.indexOf(this.name)){ 
+        user.channels.push(this.name);     
+    }
+}
 
 /**
  * leave the  channel
  */
 Channel.prototype.part = function part(){
-	  this.client.part(this.name).addCallback(function(){
+	  this._client.part(this.name).addCallback(function(){
         this.emit("PART");
     });
 };
@@ -30,7 +56,7 @@ Channel.prototype.part = function part(){
  * @param text the message
  */
 Channel.prototype.msg = function msg(text){
-	this.client.privmsg(this.name, text);
+	this._client.privmsg(this.name, text);
 };
 
 /**
@@ -38,7 +64,7 @@ Channel.prototype.msg = function msg(text){
  * @param text
  */
 Channel.prototype.notice = function notice(text){
-    this.client.notice(this.name, text);
+    this._client.notice(this.name, text);
 };
 
 /**
@@ -48,11 +74,12 @@ Channel.prototype.notice = function notice(text){
  */
 Channel.prototype.who = function who(){
     var channel = this;
-    return this.client.who(this.name).addCallback(function(list){
+    return this._client.who(this.name).addCallback(function(list){
         // here no simple chan.list = list because we want code that holds
         // a reference to the list work with the updated one as well
         channel.wholist.splice(0);
         for(var p in channel.wholist){
+            if(!channel.wholist.hasOwnProperty(p)) continue;
             channel.wholist[p] = undefined;
         }
         list.forEach(function(x){
