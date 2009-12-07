@@ -30,8 +30,11 @@ Bot.prototype.initialize = function initialize(config){
 
 /**
  * findTrigger looks for a trigger to apply.
+ * @param channel channel object
+ * @param msg message to test
+ * @return array of triggers that match
  */
-Bot.prototype.findTrigger = function findTrigger(from, channel, msg){
+Bot.prototype.findTrigger = function findTrigger(channel, msg){
     // build trigger from msg
     var triggers = [];
     // private conversation
