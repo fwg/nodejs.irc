@@ -16,16 +16,24 @@ var User = exports.User = function User(mask){
  * @name User.initialize
  */
 User.prototype.initialize = function (mask){
-    var match = mask.match(/(.+?)!(.+?)\@(.+?)/);
-    this.name = match[1]; 
-    this.mask = mask;
+    this.updateFromMask(mask);
     this.nick = this.name.toLowerCase();
     this.server = "";
-    this.user = match[2];
-    this.host = match[3];
     this.realname = "";
     this.hops = 0;
 
     this.away = false;
     this.channels = [];
 }
+
+/**
+ * update mask
+ */
+User.prototype.updateFromMask(mask){
+    var match = mask.match(/([^!]+)!([^@]+)@(.+)/);
+    this.mask = mask;
+    this.name = match[1];
+    this.user = match[2];
+    this.host = match[3];
+}
+
