@@ -116,7 +116,8 @@ NodeBot.prototype.initialize = function(config) {
  * dispatch looks for a trigger to apply.
  */
 NodeBot.prototype.dispatch = function dispatch(from, channel, msg){
-    var triggers = this.findTrigger(from, channel, msg);
+    channel = this.channel(channel);
+    var triggers = this.findTrigger(channel, msg);
     if(!triggers.length) return;
     
     from = this.user(from);

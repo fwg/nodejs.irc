@@ -16,6 +16,7 @@ var i18nObj = {
 };
 Bot.i18n.add(i18nObj);
 
+// shorthand for gettext
 function _(s, c){
     return Bot.i18n.gettext(s, c.locale);
 }
@@ -96,10 +97,10 @@ function beer(from, channel, msg){
     lasts = stolen.length > 1 ? stolen.splice(-1, 1)[0] : false;
     var msg = giver+" ";
     if(given.length){
-            msg += Bot.i18n.gettext('gives beer to', channel.locale)+" "+
+            msg += _('gives beer to', channel)+" "+
             given.join(', ')+
             (lastg?" "+
-             Bot.i18n.gettext('and', channel.locale)+" "+lastg
+             _('and', channel)+" "+lastg
             :"");
     }
     if(given.length && stolen.length){
@@ -138,8 +139,8 @@ function list(from, channel, cmd){
 }
 
 function howmuch(from, channel, cmd, name){
-    channel.msg(from.name+': '+name+' '+Bot.i18n.gettext('has', channel.locale)+
-            ' '+(stats[name] || 0)+' '+Bot.i18n.gettext('beer', channel.locale));
+    channel.msg(from.name+': '+name+' '+_('has', channel)+
+            ' '+(stats[name] || 0)+' '+_('beer', channel));
 }
 
 // beer will be called when our trigger matches
@@ -151,6 +152,7 @@ trigger.addCallback(beer);
 // they can be used for specifying rules in the config file or chat messages to the bot.
 return {'++':{ // group ++ encompasses:
          triggers: [trigger], // our trigger
+         // and our commands 'beer' for top5 and 'beer nick' for beercount of a user
          commands: [['beer', list], ['beer +', howmuch]]
         }
        };
