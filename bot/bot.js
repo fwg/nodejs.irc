@@ -20,8 +20,8 @@ sys.inherits(Bot, C.Client);
  * @see Client.initialize
  */
 Bot.prototype.initialize = function initialize(config){
-    Bot.super_.initialize.call(this, config.host, config.port, config.nick, 
-                                                    config.user, config.realname);    
+    Bot.super_.initialize.call(this, config.host, config.port, config.nick,
+                                                    config.user, config.realname);
 
     this._triggers = {};
     this._triggers.PRIV = [];
@@ -30,8 +30,11 @@ Bot.prototype.initialize = function initialize(config){
 
 /**
  * findTrigger looks for a trigger to apply.
+ * @param channel channel object
+ * @param msg message to test
+ * @return array of triggers that match
  */
-Bot.prototype.findTrigger = function findTrigger(from, channel, msg){
+Bot.prototype.findTrigger = function findTrigger(channel, msg){
     // build trigger from msg
     var triggers = [];
     // private conversation
