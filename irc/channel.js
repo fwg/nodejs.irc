@@ -26,7 +26,7 @@ sys.inherits(Channel, process.EventEmitter);
 Channel.prototype.onPart = function(user){
     this.wholist.splice(this.wholist.indexOf(user), 1);
     this.wholist[user.nick] = undefined;
-    user.channels.splice(user.channels.indexOf(this.name), 1):
+    user.channels.splice(user.channels.indexOf(this.name), 1);
 }
 
 /**

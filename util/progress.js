@@ -45,7 +45,7 @@ Progress.prototype.handler = function(event){
     return function handler(){
         prgrs._left--;
         var a = prgrs._actions;
-        var res = Array.prototype.slice.call(arguments,1);
+        var res = Array.prototype.slice.call(arguments);
         var i = a.indexOf(this);
         prgrs._results[i] = res;
         delete a[i];

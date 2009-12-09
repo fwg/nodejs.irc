@@ -26,27 +26,42 @@ Bot.prototype.initialize = function initialize(config){
     this._triggers = {};
     this._triggers.PRIV = [];
     this._triggers['*'] = [];
+    
+    var bot = this;
+    this.addListener('PRIVMSG', function(){bot.dispatch.apply(bot, arguments)});
 };
 
 /**
+ * dispatch the message to all possible triggers
+ */
+Bot.prototype.dispatch = function dispatch(from, channel, msg){
+    var ts = this.findTriggers(channel, msg);
+    if(ts.length){
+        for(var i=0, t; t=ts[i]; i++){
+           t.emit("match", this.user(from), this.channel(channel), msg);
+        }
+    }
+}; 
+
+/**
  * findTrigger looks for a trigger to apply.
- * @param channel channel object
+ * @param channel channel string
  * @param msg message to test
  * @return array of triggers that match
  */
-Bot.prototype.findTrigger = function findTrigger(channel, msg){
+Bot.prototype.findTriggers = function findTriggers(channel, msg){
     // build trigger from msg
     var triggers = [];
     // private conversation
-    if(!/^[+#!&]/.test(channel.name)){
+    if(!/^[+#!&]/.test(channel)){
         for(var i=0, t; t = this._triggers.PRIV[i]; i++){
             if(t.trigger.test(msg)){
                triggers.push(t);
             }
         }
     }else{
-        if(this._triggers[channel.name]){
-          for(var i=0, ts=this._triggers[channel.name]; t = ts[i]; i++){
+        if(this._triggers[channel.toLowerCase()]){
+          for(var i=0, ts=this._triggers[channel.toLowerCase()]; t = ts[i]; i++){
             if(t.trigger.test(msg)){
                triggers.push(t);
             }
@@ -78,8 +93,9 @@ Bot.prototype.Trigger = require('./trigger').Trigger;
 Bot.prototype.addTrigger = function addTrigger(trigger, channels){
     var ts;
     for(var i=0, channel; channel = channels[i]; i++){
+        channel = channel.toLowerCase();
         ts = this._triggers[channel];
-        if(!ts)this._triggers[channel] = [];
+        if(!ts)ts = this._triggers[channel] = [];
         if(!ts[trigger.id]){
             ts.push(trigger);
             ts[trigger.id] = true;
