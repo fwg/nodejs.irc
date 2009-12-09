@@ -29,7 +29,7 @@ User.prototype.initialize = function (mask){
 /**
  * update mask
  */
-User.prototype.updateFromMask(mask){
+User.prototype.updateFromMask = function (mask){
     var match = mask.match(/([^!]+)!([^@]+)@(.+)/);
     this.mask = mask;
     this.name = match[1];
