@@ -15,12 +15,13 @@ var sys = require('sys');
  * p.addCallback(function(content){
  *   puts(content); 
  * }).addFinishback(function(cfile1, cfile2){
- *   file3.write(cfile1 + cfile2);
+ *   file3.write(cfile1[0] + cfile2[0]);
  * });
  *
  * the order of the stdout output is not predictable, but the finish callback can 
- * write the content in order.
- * if e.g. file1 was not found, it will not be printed to stdout and cfile1 will be 
+ * write the content in order. It gets the arguments of the "success"/"error"/"cancel"
+ * events of the progressing things as arrays in order they were added.
+ * If e.g. file1 was not found, it will not be printed to stdout and cfile1[0] will be 
  * the error object.
  * @name Progress
  * @constructor
